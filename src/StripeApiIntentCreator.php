@@ -18,14 +18,14 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
 {
     public function __construct(private StripeClient $client) {}
 
-    public function create(int $amountMinor, string $currency, string $reference): array
+    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey): array
     {
         try {
             $intent = $this->client->paymentIntents->create([
                 'amount' => $amountMinor,
                 'currency' => strtolower($currency),
                 'metadata' => ['reference' => $reference],
-            ]);
+            ], ['idempotency_key' => $idempotencyKey]);
         } catch (Throwable $e) {
             throw new StripeChargeFailed($e->getMessage(), previous: $e);
         }

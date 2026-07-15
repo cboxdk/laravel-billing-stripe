@@ -13,14 +13,19 @@ use Cbox\Billing\Stripe\Exceptions\StripeChargeFailed;
  */
 class FakeStripeIntentCreator implements StripeIntentCreator
 {
+    /** @var list<string> the idempotency keys the gateway passed, in order */
+    public array $idempotencyKeys = [];
+
     public function __construct(
         private string $status = 'succeeded',
         private string $id = 'pi_fake',
         private bool $fail = false,
     ) {}
 
-    public function create(int $amountMinor, string $currency, string $reference): array
+    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey): array
     {
+        $this->idempotencyKeys[] = $idempotencyKey;
+
         if ($this->fail) {
             throw new StripeChargeFailed('card_declined');
         }

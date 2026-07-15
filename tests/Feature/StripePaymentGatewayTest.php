@@ -6,6 +6,7 @@ use Cbox\Billing\Money\Money;
 use Cbox\Billing\Payment\Enums\PaymentStatus;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
 use Cbox\Billing\Stripe\StripePaymentGateway;
+use Cbox\Billing\Stripe\Testing\FakeSettledPaymentStore;
 use Cbox\Billing\Stripe\Testing\FakeStripeIntentCreator;
 
 function paymentIntent(): PaymentIntent
@@ -13,34 +14,63 @@ function paymentIntent(): PaymentIntent
     return new PaymentIntent('pi_1', Money::ofMinor(12500, 'EUR'), 'DK-000001');
 }
 
+function gateway(FakeStripeIntentCreator $creator, ?FakeSettledPaymentStore $settled = null): StripePaymentGateway
+{
+    return new StripePaymentGateway($creator, $settled ?? new FakeSettledPaymentStore);
+}
+
 it('is named stripe', function () {
-    expect((new StripePaymentGateway(new FakeStripeIntentCreator))->name())->toBe('stripe');
+    expect(gateway(new FakeStripeIntentCreator)->name())->toBe('stripe');
 });
 
 it('maps a succeeded intent to a settled result', function () {
-    $result = (new StripePaymentGateway(new FakeStripeIntentCreator('succeeded', 'pi_live')))->charge(paymentIntent());
+    $result = gateway(new FakeStripeIntentCreator('succeeded', 'pi_live'))->charge(paymentIntent());
 
     expect($result->isSettled())->toBeTrue()
         ->and($result->gatewayReference)->toBe('pi_live');
 });
 
 it('maps processing to pending and requires_action to requires-action', function () {
-    $processing = (new StripePaymentGateway(new FakeStripeIntentCreator('processing')))->charge(paymentIntent());
-    $action = (new StripePaymentGateway(new FakeStripeIntentCreator('requires_action')))->charge(paymentIntent());
+    $processing = gateway(new FakeStripeIntentCreator('processing'))->charge(paymentIntent());
+    $action = gateway(new FakeStripeIntentCreator('requires_action'))->charge(paymentIntent());
 
     expect($processing->status)->toBe(PaymentStatus::Pending)
         ->and($action->status)->toBe(PaymentStatus::RequiresAction);
 });
 
 it('turns an API failure into a failed result without throwing', function () {
-    $result = (new StripePaymentGateway(new FakeStripeIntentCreator(fail: true)))->charge(paymentIntent());
+    $result = gateway(new FakeStripeIntentCreator(fail: true))->charge(paymentIntent());
 
     expect($result->status)->toBe(PaymentStatus::Failed)
         ->and($result->failureReason)->toBe('card_declined');
 });
 
 it('treats an unexpected status as failed', function () {
-    $result = (new StripePaymentGateway(new FakeStripeIntentCreator('canceled')))->charge(paymentIntent());
+    $result = gateway(new FakeStripeIntentCreator('canceled'))->charge(paymentIntent());
 
     expect($result->status)->toBe(PaymentStatus::Failed);
+});
+
+it('passes a scoped external idempotency key derived from reference, amount and currency', function () {
+    $creator = new FakeStripeIntentCreator;
+
+    gateway($creator)->charge(paymentIntent());
+
+    expect($creator->idempotencyKeys)->toBe(['cbx-DK-000001-12500-EUR']);
+});
+
+it('records the reference as settled on a succeeded charge (webhook backstop)', function () {
+    $settled = new FakeSettledPaymentStore;
+
+    gateway(new FakeStripeIntentCreator('succeeded'), $settled)->charge(paymentIntent());
+
+    expect($settled->isSettled('DK-000001'))->toBeTrue();
+});
+
+it('does not record settlement when the charge is not settled', function () {
+    $settled = new FakeSettledPaymentStore;
+
+    gateway(new FakeStripeIntentCreator('processing'), $settled)->charge(paymentIntent());
+
+    expect($settled->isSettled('DK-000001'))->toBeFalse();
 });

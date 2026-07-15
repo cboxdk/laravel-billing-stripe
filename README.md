@@ -27,6 +27,12 @@ to the Stripe gateway. Without one, billing keeps its default (manual) gateway.
   status-mapping and error handling are fully unit-tested without the network.
 - **Never throws.** A Stripe API failure becomes a failed `PaymentResult`; Stripe
   statuses map to `succeeded` / `pending` / `requires_action` / `failed`.
+- **Idempotent webhooks.** `StripeWebhookHandler` verifies the signature (via the
+  SDK — deny-by-default), dedups on Stripe's stable event id, settles each reference
+  at most once, and no-ops when the inline path already settled it. Charges carry a
+  scoped external idempotency key so a crash-and-retry never double-charges. Set
+  `STRIPE_WEBHOOK_SECRET` to enable it. See
+  [docs/core-concepts/webhooks.md](docs/core-concepts/webhooks.md).
 
 > The SDK wrapper implements Stripe's documented API shape — verify against the live
 > Stripe API (and provision real keys) before relying on it in production.

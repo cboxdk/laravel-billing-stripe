@@ -16,4 +16,17 @@ return [
 
     'secret' => env('STRIPE_SECRET'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook signing secret
+    |--------------------------------------------------------------------------
+    |
+    | The endpoint signing secret (`whsec_…`) used to verify incoming webhook
+    | signatures. When set, the webhook verifier and handler are bound; without it
+    | the handler is unavailable and unverified payloads are rejected by default.
+    |
+    */
+
+    'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+
 ];
