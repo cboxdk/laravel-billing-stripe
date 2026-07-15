@@ -5,23 +5,26 @@ declare(strict_types=1);
 namespace Cbox\Billing\Stripe;
 
 use Cbox\Billing\Payment\Contracts\PaymentGateway;
+use Cbox\Billing\Payment\Contracts\SettledPaymentStore;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
 use Cbox\Billing\Payment\ValueObjects\PaymentResult;
-use Cbox\Billing\Stripe\Contracts\SettledPaymentStore;
+use Cbox\Billing\Payment\ValueObjects\RefundIntent;
 use Cbox\Billing\Stripe\Contracts\StripeIntentCreator;
 use Cbox\Billing\Stripe\Exceptions\StripeChargeFailed;
 
 /**
  * A {@see PaymentGateway} backed by Stripe. Creates a Stripe payment intent for the
- * amount and maps Stripe's status to a PaymentResult. An API failure becomes a
- * failed result — the gateway never throws.
+ * amount (and refunds a captured amount) and maps Stripe's status to a PaymentResult.
+ * An API failure becomes a failed result — the gateway never throws.
  *
- * Two idempotency properties live here:
+ * Idempotency properties that live here:
  *
  *  - The intent is created with a scoped external idempotency key
  *    (`reference:amount:currency`), so a crash-and-retry between the API call and
- *    recording the result cannot double-charge.
- *  - On a settled result the reference is recorded in the {@see SettledPaymentStore},
+ *    recording the result cannot double-charge. A refund is scoped by the intent's own
+ *    idempotency key so a retry cannot refund twice.
+ *  - On a settled charge the reference is recorded in the shared
+ *    {@see SettledPaymentStore} — the same settle-once guard the webhook ingest reads,
  *    so a later webhook re-confirming the same payment is a no-op (the backstop).
  */
 readonly class StripePaymentGateway implements PaymentGateway
@@ -53,10 +56,25 @@ readonly class StripePaymentGateway implements PaymentGateway
         $mapped = $this->mapper->map($result['status'], $result['id']);
 
         if ($mapped->isSettled()) {
-            $this->settledPayments->markSettled($intent->reference);
+            $this->settledPayments->settle($intent->reference);
         }
 
         return $mapped;
+    }
+
+    public function refund(RefundIntent $intent): PaymentResult
+    {
+        try {
+            $result = $this->creator->refund(
+                $intent->amount->minor(),
+                $intent->originalGatewayReference ?? '',
+                $intent->idempotencyKey,
+            );
+        } catch (StripeChargeFailed $e) {
+            return PaymentResult::failed($e->getMessage());
+        }
+
+        return $this->mapper->mapRefund($result['status'], $result['id']);
     }
 
     /**

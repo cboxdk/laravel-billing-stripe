@@ -4,74 +4,36 @@ declare(strict_types=1);
 
 namespace Cbox\Billing\Stripe;
 
-use Cbox\Billing\Payment\ValueObjects\PaymentResult;
-use Cbox\Billing\Stripe\Contracts\ProcessedEventStore;
-use Cbox\Billing\Stripe\Contracts\SettledPaymentStore;
-use Cbox\Billing\Stripe\Contracts\WebhookVerifier;
-use Cbox\Billing\Stripe\Exceptions\WebhookVerificationFailed;
-use Cbox\Billing\Stripe\ValueObjects\WebhookEvent;
+use Cbox\Billing\Payment\Contracts\WebhookIngest;
+use Cbox\Billing\Payment\Contracts\WebhookVerifier;
+use Cbox\Billing\Payment\Exceptions\WebhookVerificationFailed;
+use Cbox\Billing\Payment\ValueObjects\IngestOutcome;
+use Cbox\Billing\Payment\ValueObjects\WebhookPayload;
 
 /**
- * Turns a raw Stripe webhook delivery into an idempotent {@see PaymentResult}. Three
- * layers make replays and retries safe:
+ * The adapter's inbound-webhook entry point: prove the Stripe delivery authentic, then
+ * hand the normalised event to the engine's exactly-once ingest. It composes two shared
+ * seams and owns no idempotency logic of its own:
  *
- *  1. Signature verification (deny-by-default) — an unverified payload never touches
- *     state; it throws {@see WebhookVerificationFailed}.
- *  2. Event-id dedup — a delivery whose Stripe event id (`evt_…`) was already
- *     processed is a no-op (returns null).
- *  3. Per-reference settle-once + backstop — a `succeeded` event settles a reference
- *     only if it is not already settled; if the inline `charge()` path (or an earlier
- *     event) already settled it, re-confirmation is a no-op.
- *
- * Returns the mapped result for the host to apply, or null when the delivery is a
- * duplicate / not actionable.
+ *  1. {@see WebhookVerifier} — the Stripe-backed verifier proves the signature
+ *     (deny-by-default: an unverified payload throws {@see WebhookVerificationFailed}
+ *     and never reaches the ingest) and normalises the event.
+ *  2. {@see WebhookIngest} — the engine's exactly-once ingest applies the paid effect
+ *     to the invoice at most once per reference, collapsing gateway re-deliveries and
+ *     crash-retries; the returned {@see IngestOutcome} tells the host what happened.
  */
 readonly class StripeWebhookHandler
 {
     public function __construct(
         private WebhookVerifier $verifier,
-        private ProcessedEventStore $processedEvents,
-        private SettledPaymentStore $settledPayments,
-        private StripeStatusMapper $mapper = new StripeStatusMapper,
+        private WebhookIngest $ingest,
     ) {}
 
     /**
-     * @throws WebhookVerificationFailed
+     * @throws WebhookVerificationFailed when the payload is not provably authentic.
      */
-    public function handle(string $payload, string $signatureHeader): ?PaymentResult
+    public function handle(WebhookPayload $payload): IngestOutcome
     {
-        $event = $this->verifier->verify($payload, $signatureHeader);
-
-        // We only act on payment-intent lifecycle events; anything else is ignored
-        // (and deliberately not recorded, so the store stays scoped to what we handle).
-        if (! str_starts_with($event->type, 'payment_intent.')) {
-            return null;
-        }
-
-        // Event-id dedup: a replayed delivery of the same event is a no-op.
-        if (! $this->processedEvents->remember($event->eventId)) {
-            return null;
-        }
-
-        return $this->applyEffect($event);
-    }
-
-    private function applyEffect(WebhookEvent $event): ?PaymentResult
-    {
-        $result = $this->mapper->map($event->status, $event->gatewayReference);
-
-        if (! $result->isSettled() || $event->reference === '') {
-            return $result;
-        }
-
-        // Per-reference settle-once + no-op backstop: only the first path to settle
-        // this reference applies the effect.
-        if ($this->settledPayments->isSettled($event->reference)) {
-            return null;
-        }
-
-        $this->settledPayments->markSettled($event->reference);
-
-        return $result;
+        return $this->ingest->ingest($this->verifier->verify($payload));
     }
 }

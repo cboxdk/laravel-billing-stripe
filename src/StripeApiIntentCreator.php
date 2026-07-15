@@ -35,4 +35,21 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
             'status' => (string) $intent->status,
         ];
     }
+
+    public function refund(int $amountMinor, string $paymentIntentId, string $idempotencyKey): array
+    {
+        try {
+            $refund = $this->client->refunds->create([
+                'payment_intent' => $paymentIntentId,
+                'amount' => $amountMinor,
+            ], ['idempotency_key' => $idempotencyKey]);
+        } catch (Throwable $e) {
+            throw new StripeChargeFailed($e->getMessage(), previous: $e);
+        }
+
+        return [
+            'id' => (string) $refund->id,
+            'status' => (string) $refund->status,
+        ];
+    }
 }

@@ -23,4 +23,19 @@ readonly class StripeStatusMapper
             default => PaymentResult::failed("Unexpected Stripe status: {$status}"),
         };
     }
+
+    /**
+     * Maps a Stripe refund status to a {@see PaymentResult}. Refunds carry a different
+     * status vocabulary from charges (`pending` rather than `processing`), so they map
+     * separately — a `canceled`/`failed` refund is a failure, `pending` is out-of-band.
+     */
+    public function mapRefund(string $status, string $gatewayReference): PaymentResult
+    {
+        return match ($status) {
+            'succeeded' => PaymentResult::succeeded($gatewayReference),
+            'pending' => PaymentResult::pending($gatewayReference),
+            'requires_action' => new PaymentResult(PaymentStatus::RequiresAction, $gatewayReference),
+            default => PaymentResult::failed("Unexpected Stripe refund status: {$status}"),
+        };
+    }
 }

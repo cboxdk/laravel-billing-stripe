@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace Cbox\Billing\Stripe;
 
 use Cbox\Billing\Payment\Contracts\PaymentGateway;
-use Cbox\Billing\Stripe\Contracts\ProcessedEventStore;
-use Cbox\Billing\Stripe\Contracts\SettledPaymentStore;
+use Cbox\Billing\Payment\Contracts\ProcessedEventStore;
+use Cbox\Billing\Payment\Contracts\SettledPaymentStore;
+use Cbox\Billing\Payment\Contracts\WebhookIngest;
+use Cbox\Billing\Payment\Contracts\WebhookVerifier;
 use Cbox\Billing\Stripe\Contracts\StripeIntentCreator;
-use Cbox\Billing\Stripe\Contracts\WebhookVerifier;
 use Cbox\Billing\Stripe\Database\DatabaseProcessedEventStore;
 use Cbox\Billing\Stripe\Database\DatabaseSettledPaymentStore;
 use Illuminate\Contracts\Config\Repository as Config;
@@ -19,10 +20,16 @@ use Stripe\StripeClient;
 
 /**
  * Binds the Stripe gateway as billing's PaymentGateway when a secret key is
- * configured, and the idempotent webhook handler when a signing secret is configured.
- * Each is independent — without a key the provider stays out of the way and billing
- * keeps its default. The dedup/settlement stores default to durable database
- * implementations so idempotency survives across processes and retries.
+ * configured, and the Stripe-backed webhook verifier when a signing secret is
+ * configured. Each is independent — without a key the provider stays out of the way and
+ * billing keeps its default.
+ *
+ * The refactor onto the shared webhook seam: this adapter no longer owns a verifier
+ * contract, dedup/settle stores, or ingest logic. It overrides the engine's shared
+ * {@see ProcessedEventStore} and {@see SettledPaymentStore} with durable database
+ * implementations (so idempotency survives across processes and retries) and binds the
+ * gateway-specific {@see WebhookVerifier}; the engine's own {@see WebhookIngest} then
+ * applies the paid effect exactly once over those durable stores.
  */
 class StripeServiceProvider extends ServiceProvider
 {
@@ -76,8 +83,7 @@ class StripeServiceProvider extends ServiceProvider
 
         $this->app->singleton(StripeWebhookHandler::class, static fn (Application $app): StripeWebhookHandler => new StripeWebhookHandler(
             $app->make(WebhookVerifier::class),
-            $app->make(ProcessedEventStore::class),
-            $app->make(SettledPaymentStore::class),
+            $app->make(WebhookIngest::class),
         ));
     }
 
