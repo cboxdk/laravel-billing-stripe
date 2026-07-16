@@ -9,12 +9,15 @@ use Cbox\Billing\Stripe\Exceptions\StripeChargeFailed;
 
 /**
  * A scripted intent creator for tests — returns a fixed id/status or throws, for the
- * charge, refund, on/off-session intent, and stored-method paths, with no SDK or network.
+ * charge, refund, on/off-session intent, customer, and stored-method paths, with no SDK or
+ * network.
  *
  * The stored-method operations behave like a small per-account vault the suite can assert
- * on: the first method attached to an account becomes its default, and setDefault reassigns
- * the flag — the same observable shape the shared engine fake exposes, so a test reads the
- * real attach/list/default behaviour rather than a canned response.
+ * on: the first method attached to an account becomes its default, setDefault reassigns the
+ * flag, and detach drops the method (idempotently) — the same observable shape the shared
+ * engine fake exposes, so a test reads the real attach/list/default/detach behaviour rather
+ * than a canned response. createCustomer mints one `cus_test_…` reference per account and
+ * remembers it, and every customer/detach call is recorded for assertions.
  */
 class FakeStripeIntentCreator implements StripeIntentCreator
 {
@@ -35,6 +38,15 @@ class FakeStripeIntentCreator implements StripeIntentCreator
 
     /** @var array<string, list<array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}>> */
     private array $methods = [];
+
+    /** @var array<string, string> the customer ref minted per account, so a second call re-resolves the same id */
+    private array $customers = [];
+
+    /** @var list<array{account: string, email: ?string, name: ?string}> every createCustomer call, in order */
+    public array $customerCalls = [];
+
+    /** @var list<array{account: string, methodId: string}> every detachMethod call, in order */
+    public array $detachments = [];
 
     public function __construct(
         private string $status = 'succeeded',
@@ -132,5 +144,49 @@ class FakeStripeIntentCreator implements StripeIntentCreator
             },
             $this->methods[$account] ?? [],
         );
+    }
+
+    public function createCustomer(string $account, ?string $email, ?string $name): string
+    {
+        $this->customerCalls[] = ['account' => $account, 'email' => $email, 'name' => $name];
+
+        if ($this->fail) {
+            throw new StripeChargeFailed('customer_failed');
+        }
+
+        // Mint once per account and remember it, so a repeat re-resolves the same reference.
+        return $this->customers[$account] ??= 'cus_test_'.$account;
+    }
+
+    public function detachMethod(string $account, string $paymentMethodId): void
+    {
+        $this->detachments[] = ['account' => $account, 'methodId' => $paymentMethodId];
+
+        if ($this->fail) {
+            throw new StripeChargeFailed('detach_failed');
+        }
+
+        // Idempotent: dropping an already-detached method from the vault is a clean no-op.
+        $remaining = array_values(array_filter(
+            $this->methods[$account] ?? [],
+            static fn (array $method): bool => $method['id'] !== $paymentMethodId,
+        ));
+
+        if ($remaining === []) {
+            unset($this->methods[$account]);
+
+            return;
+        }
+
+        $this->methods[$account] = $remaining;
+    }
+
+    /**
+     * The customer reference minted for `$account`, or null if none was ever created — lets a
+     * test assert the mint-once behaviour without reaching through createCustomer again.
+     */
+    public function customerFor(string $account): ?string
+    {
+        return $this->customers[$account] ?? null;
     }
 }

@@ -92,4 +92,25 @@ interface StripeIntentCreator
      * @throws StripeChargeFailed
      */
     public function setDefaultMethod(string $account, string $paymentMethodId): void;
+
+    /**
+     * Create the Stripe customer that saved methods and off-session charges attach to,
+     * stamping `metadata.account => $account` so the object reconciles back to the host
+     * account from the dashboard, and return its `cus_…` id. `$email`/`$name` are set only
+     * when provided. An SDK failure surfaces: a customer that was never created must not be
+     * returned as an id.
+     *
+     * @throws StripeChargeFailed
+     */
+    public function createCustomer(string $account, ?string $email, ?string $name): string;
+
+    /**
+     * Detach `$paymentMethodId` from its customer so it can no longer be charged. Idempotent:
+     * if Stripe reports the method is already detached / not attached, that is treated as
+     * success and swallowed — any other failure surfaces. `$account` is advisory (Stripe
+     * detaches globally), kept for the seam shape and auditing.
+     *
+     * @throws StripeChargeFailed
+     */
+    public function detachMethod(string $account, string $paymentMethodId): void;
 }

@@ -150,6 +150,51 @@ it('creates an off-session setup intent that saves a method for renewals', funct
         ->and($creator->setupIdempotencyKeys)->toBe(['idem-seti-1']);
 });
 
+it('creates a customer, returns its ref, and stamps the account for reconciliation', function () {
+    $creator = new FakeStripeIntentCreator;
+
+    $ref = gateway($creator)->createCustomer('DK-000001', 'ada@example.test', 'Ada Lovelace');
+
+    expect($ref)->toBe('cus_test_DK-000001')
+        ->and($creator->customerCalls)->toBe([
+            ['account' => 'DK-000001', 'email' => 'ada@example.test', 'name' => 'Ada Lovelace'],
+        ])
+        ->and($creator->customerFor('DK-000001'))->toBe('cus_test_DK-000001');
+});
+
+it('re-resolves the same customer ref on a repeat create (mint once)', function () {
+    $creator = new FakeStripeIntentCreator;
+    $gw = gateway($creator);
+
+    $first = $gw->createCustomer('DK-000001');
+    $second = $gw->createCustomer('DK-000001');
+
+    expect($second)->toBe($first)
+        ->and($creator->customerCalls)->toHaveCount(2);
+});
+
+it('detaches a payment method by delegating to the seam and is idempotent on a repeat', function () {
+    $creator = new FakeStripeIntentCreator;
+    $gw = gateway($creator);
+
+    $gw->attachPaymentMethod('cus_1', 'pm_a');
+    $gw->attachPaymentMethod('cus_1', 'pm_b');
+
+    $gw->detachPaymentMethod('cus_1', 'pm_a');
+
+    expect($gw->paymentMethods('cus_1'))->toHaveCount(1)
+        ->and(collect($gw->paymentMethods('cus_1'))->pluck('id')->all())->toBe(['pm_b']);
+
+    // A repeat detach of the already-gone method is a clean no-op, not an error.
+    $gw->detachPaymentMethod('cus_1', 'pm_a');
+
+    expect($gw->paymentMethods('cus_1'))->toHaveCount(1)
+        ->and($creator->detachments)->toBe([
+            ['account' => 'cus_1', 'methodId' => 'pm_a'],
+            ['account' => 'cus_1', 'methodId' => 'pm_a'],
+        ]);
+});
+
 it('attaches a payment method, lists it, and makes it the default', function () {
     $gw = gateway(new FakeStripeIntentCreator);
 

@@ -6,6 +6,7 @@ namespace Cbox\Billing\Stripe;
 
 use Cbox\Billing\Stripe\Contracts\StripeIntentCreator;
 use Cbox\Billing\Stripe\Exceptions\StripeChargeFailed;
+use Stripe\Exception\InvalidRequestException;
 use Stripe\StripeClient;
 use Throwable;
 
@@ -142,6 +143,58 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
         } catch (Throwable $e) {
             throw new StripeChargeFailed($e->getMessage(), previous: $e);
         }
+    }
+
+    public function createCustomer(string $account, ?string $email, ?string $name): string
+    {
+        $params = ['metadata' => ['account' => $account]];
+
+        if ($name !== null && $name !== '') {
+            $params['name'] = $name;
+        }
+
+        if ($email !== null && $email !== '') {
+            $params['email'] = $email;
+        }
+
+        try {
+            $customer = $this->client->customers->create($params);
+        } catch (Throwable $e) {
+            throw new StripeChargeFailed($e->getMessage(), previous: $e);
+        }
+
+        return (string) $customer->id;
+    }
+
+    public function detachMethod(string $account, string $paymentMethodId): void
+    {
+        try {
+            $this->client->paymentMethods->detach($paymentMethodId);
+        } catch (InvalidRequestException $e) {
+            // Detaching an already-detached / never-attached method is a no-op for the
+            // caller's intent, so swallow only that case and let every other failure surface.
+            if (self::isAlreadyDetached($e)) {
+                return;
+            }
+
+            throw new StripeChargeFailed($e->getMessage(), previous: $e);
+        } catch (Throwable $e) {
+            throw new StripeChargeFailed($e->getMessage(), previous: $e);
+        }
+    }
+
+    /**
+     * Whether the invalid-request failure is Stripe reporting the method is not attached to
+     * a customer (so a repeat detach is already in the desired state) rather than a genuine
+     * problem. Stripe gives no dedicated error code for this, so the message is the signal.
+     */
+    private static function isAlreadyDetached(InvalidRequestException $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        return str_contains($message, 'not attached')
+            || str_contains($message, 'already been detached')
+            || str_contains($message, 'already detached');
     }
 
     /**

@@ -131,6 +131,17 @@ readonly class StripePaymentGateway implements PaymentGateway
     }
 
     /**
+     * Create the Stripe customer saved methods and off-session charges attach to, stamping
+     * the host `$account` into its metadata for dashboard reconciliation, and return the
+     * `cus_…` id. The seam surfaces an SDK failure rather than returning an id for a customer
+     * that was never created; the host persists the account→reference mapping.
+     */
+    public function createCustomer(string $account, ?string $email = null, ?string $name = null): string
+    {
+        return $this->creator->createCustomer($account, $email, $name);
+    }
+
+    /**
      * @return list<PaymentMethod>
      */
     public function paymentMethods(string $account): array
@@ -149,6 +160,16 @@ readonly class StripePaymentGateway implements PaymentGateway
     public function setDefaultPaymentMethod(string $account, string $paymentMethodId): void
     {
         $this->creator->setDefaultMethod($account, $paymentMethodId);
+    }
+
+    /**
+     * Detach the vaulted method so future off-session renewals can no longer charge it. The
+     * seam swallows an already-detached / never-attached method, so a retried teardown is a
+     * no-op; `$account` is advisory since Stripe detaches globally.
+     */
+    public function detachPaymentMethod(string $account, string $paymentMethodId): void
+    {
+        $this->creator->detachMethod($account, $paymentMethodId);
     }
 
     /**
