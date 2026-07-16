@@ -62,15 +62,20 @@ readonly class StripeApiWebhookVerifier implements WebhookVerifier
     /**
      * Map Stripe's payment-intent lifecycle event onto the engine's narrow event type.
      * Only `payment_intent.succeeded` carries the paid effect; an explicit failure or
-     * cancellation maps to a failure notice; every other authentic event (processing,
-     * requires_action, and anything else the endpoint receives) maps to a pending
-     * notice — recorded and deduped by the ingest, but moving no money.
+     * cancellation maps to a failure notice. The SCA states are now first-class and no
+     * longer collapsed to a generic pending notice: `payment_intent.requires_action` is a
+     * live 3-D Secure challenge ({@see WebhookEventType::RequiresAction}) and
+     * `payment_intent.processing` is an accepted-but-not-yet-settled charge
+     * ({@see WebhookEventType::Processing}). Neither moves money — the invoice is marked
+     * paid strictly on settlement. Anything else authentic maps to a pending notice.
      */
     private static function mapType(string $stripeType): WebhookEventType
     {
         return match ($stripeType) {
             'payment_intent.succeeded' => WebhookEventType::PaymentSettled,
             'payment_intent.payment_failed', 'payment_intent.canceled' => WebhookEventType::PaymentFailed,
+            'payment_intent.requires_action' => WebhookEventType::RequiresAction,
+            'payment_intent.processing' => WebhookEventType::Processing,
             default => WebhookEventType::PaymentPending,
         };
     }

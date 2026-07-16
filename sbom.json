@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:ea8a1752-088d-4bab-8e86-1e919949e282",
+    "serialNumber": "urn:uuid:bfa33e81-4c72-4876-ab0e-98584aa3bae3",
     "version": 1,
     "metadata": {
         "tools": [
@@ -69,11 +69,11 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/cboxdk/laravel-billing@v0.2.0",
+            "bom-ref": "pkg:composer/cboxdk/laravel-billing@v0.3.0",
             "group": "cboxdk",
             "name": "laravel-billing",
-            "version": "v0.2.0",
-            "purl": "pkg:composer/cboxdk/laravel-billing@v0.2.0",
+            "version": "v0.3.0",
+            "purl": "pkg:composer/cboxdk/laravel-billing@v0.3.0",
             "description": "Cbox Billing \u2014 the billing engine for Laravel \u2014 a gateway-agnostic library: catalog, subscriptions, real-time usage metering with hard limits, a double-entry ledger, invoicing, and pricing operations.",
             "licenses": [
                 {

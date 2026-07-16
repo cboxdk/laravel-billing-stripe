@@ -58,8 +58,23 @@ it('maps an explicit failure event to a non-settling failure notice', function (
         ->and($event->isSettlement())->toBeFalse();
 });
 
-it('maps any other authentic event to a pending notice (no effect)', function () {
+it('maps a requires_action event to the SCA RequiresAction type (no effect)', function () {
+    $event = (new StripeApiWebhookVerifier(SECRET))->verify(signed(eventBody('payment_intent.requires_action', 'requires_action')));
+
+    expect($event->type)->toBe(WebhookEventType::RequiresAction)
+        ->and($event->type->requiresCustomerAction())->toBeTrue()
+        ->and($event->isSettlement())->toBeFalse();
+});
+
+it('maps a processing event to the Processing type (no effect)', function () {
     $event = (new StripeApiWebhookVerifier(SECRET))->verify(signed(eventBody('payment_intent.processing', 'processing')));
+
+    expect($event->type)->toBe(WebhookEventType::Processing)
+        ->and($event->isSettlement())->toBeFalse();
+});
+
+it('maps any other authentic event to a pending notice (no effect)', function () {
+    $event = (new StripeApiWebhookVerifier(SECRET))->verify(signed(eventBody('payment_intent.created', 'requires_payment_method')));
 
     expect($event->type)->toBe(WebhookEventType::PaymentPending)
         ->and($event->isSettlement())->toBeFalse();

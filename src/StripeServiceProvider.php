@@ -63,11 +63,15 @@ class StripeServiceProvider extends ServiceProvider
             return;
         }
 
+        $publishable = $config->get('billing-stripe.publishable');
+        $publishableKey = is_string($publishable) ? $publishable : '';
+
         $this->app->singleton(StripeIntentCreator::class, static fn (): StripeApiIntentCreator => new StripeApiIntentCreator(new StripeClient($secret)));
 
         $this->app->singleton(PaymentGateway::class, static fn (Application $app): StripePaymentGateway => new StripePaymentGateway(
             $app->make(StripeIntentCreator::class),
             $app->make(SettledPaymentStore::class),
+            $publishableKey,
         ));
     }
 

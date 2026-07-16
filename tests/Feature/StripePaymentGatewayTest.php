@@ -3,10 +3,13 @@
 declare(strict_types=1);
 
 use Cbox\Billing\Money\Money;
+use Cbox\Billing\Payment\Enums\PaymentIntentStatus;
 use Cbox\Billing\Payment\Enums\PaymentStatus;
 use Cbox\Billing\Payment\Testing\FakeSettledPaymentStore;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
+use Cbox\Billing\Payment\ValueObjects\PaymentIntentRequest;
 use Cbox\Billing\Payment\ValueObjects\RefundIntent;
+use Cbox\Billing\Payment\ValueObjects\SetupIntentRequest;
 use Cbox\Billing\Stripe\StripePaymentGateway;
 use Cbox\Billing\Stripe\Testing\FakeStripeIntentCreator;
 
@@ -20,9 +23,9 @@ function refundIntent(): RefundIntent
     return new RefundIntent('cn_1', Money::ofMinor(12500, 'EUR'), 'CN-000001', 'cbx-refund-CN-000001', 'pi_live');
 }
 
-function gateway(FakeStripeIntentCreator $creator, ?FakeSettledPaymentStore $settled = null): StripePaymentGateway
+function gateway(FakeStripeIntentCreator $creator, ?FakeSettledPaymentStore $settled = null, string $publishableKey = 'pk_test_123'): StripePaymentGateway
 {
-    return new StripePaymentGateway($creator, $settled ?? new FakeSettledPaymentStore);
+    return new StripePaymentGateway($creator, $settled ?? new FakeSettledPaymentStore, $publishableKey);
 }
 
 it('is named stripe', function () {
@@ -96,4 +99,77 @@ it('turns a refund API failure into a failed result without throwing', function 
 
     expect($result->status)->toBe(PaymentStatus::Failed)
         ->and($result->failureReason)->toBe('refund_failed');
+});
+
+it('creates an on-session payment intent shaped for the frontend element', function () {
+    $creator = new FakeStripeIntentCreator;
+    $request = new PaymentIntentRequest('cus_1', 'DK-000001', Money::ofMinor(12500, 'EUR'), 'idem-pi-1');
+
+    $result = gateway($creator)->createPaymentIntent($request);
+
+    expect($result->gateway)->toBe('stripe')
+        ->and($result->publishableKey)->toBe('pk_test_123')
+        ->and($result->clientSecret)->toBe('pi_intent_secret_idem-pi-1')
+        ->and($result->status)->toBe(PaymentIntentStatus::Succeeded)
+        ->and($result->reference)->toBe('DK-000001')
+        ->and($result->amount)->toEqual(Money::ofMinor(12500, 'EUR'))
+        ->and($creator->intentIdempotencyKeys)->toBe(['idem-pi-1'])
+        ->and($creator->intentPaymentMethodIds)->toBe([null]);
+});
+
+it('maps a 3-D Secure payment intent to RequiresAction and reports it needs customer action', function () {
+    $creator = new FakeStripeIntentCreator(intentStatus: 'requires_action');
+    $request = new PaymentIntentRequest('cus_1', 'DK-000001', Money::ofMinor(12500, 'EUR'), 'idem-pi-2', 'pm_saved');
+
+    $result = gateway($creator)->createPaymentIntent($request);
+
+    expect($result->status)->toBe(PaymentIntentStatus::RequiresAction)
+        ->and($result->requiresCustomerAction())->toBeTrue()
+        ->and($creator->intentPaymentMethodIds)->toBe(['pm_saved']);
+});
+
+it('omits the publishable key when none is configured', function () {
+    $request = new PaymentIntentRequest('cus_1', 'DK-000001', Money::ofMinor(12500, 'EUR'), 'idem-pi-3');
+
+    $result = gateway(new FakeStripeIntentCreator, publishableKey: '')->createPaymentIntent($request);
+
+    expect($result->publishableKey)->toBeNull();
+});
+
+it('creates an off-session setup intent that saves a method for renewals', function () {
+    $creator = new FakeStripeIntentCreator;
+    $request = new SetupIntentRequest('cus_1', 'idem-seti-1');
+
+    $result = gateway($creator)->createSetupIntent($request);
+
+    expect($result->gateway)->toBe('stripe')
+        ->and($result->publishableKey)->toBe('pk_test_123')
+        ->and($result->clientSecret)->toBe('seti_secret_idem-seti-1')
+        ->and($result->status)->toBe(PaymentIntentStatus::Succeeded)
+        ->and($result->reference)->toBe('seti_fake')
+        ->and($creator->setupIdempotencyKeys)->toBe(['idem-seti-1']);
+});
+
+it('attaches a payment method, lists it, and makes it the default', function () {
+    $gw = gateway(new FakeStripeIntentCreator);
+
+    expect($gw->paymentMethods('cus_1'))->toBe([]);
+
+    $first = $gw->attachPaymentMethod('cus_1', 'pm_a');
+    $second = $gw->attachPaymentMethod('cus_1', 'pm_b');
+
+    expect($first->id)->toBe('pm_a')
+        ->and($first->brand)->toBe('visa')
+        ->and($first->last4)->toBe('4242')
+        ->and($first->isDefault)->toBeTrue()
+        ->and($second->isDefault)->toBeFalse()
+        ->and($gw->paymentMethods('cus_1'))->toHaveCount(2);
+
+    $gw->setDefaultPaymentMethod('cus_1', 'pm_b');
+
+    $methods = $gw->paymentMethods('cus_1');
+    $byId = collect($methods)->keyBy->id;
+
+    expect($byId['pm_a']->isDefault)->toBeFalse()
+        ->and($byId['pm_b']->isDefault)->toBeTrue();
 });
