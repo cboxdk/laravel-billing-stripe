@@ -41,6 +41,23 @@ to the Stripe gateway. Without one, billing keeps its default (manual) gateway.
 > The SDK wrapper implements Stripe's documented API shape — verify against the live
 > Stripe API (and provision real keys) before relying on it in production.
 
+## Running the live integration tests
+
+The default suite proves the gateway against an in-memory Stripe fake. A separate
+`integration` suite (`tests/Integration/StripeLiveTest.php`) drives the **real** Stripe
+SDK path end-to-end against **Stripe test mode**. It is gated on a dedicated
+`STRIPE_TEST_SECRET` (never `STRIPE_SECRET`, so it can't collide with a production key):
+without it the suite **skips cleanly**, so it is excluded from the default run and from CI.
+
+```bash
+STRIPE_TEST_SECRET=sk_test_... vendor/bin/pest --group=integration
+```
+
+It hits Stripe test mode only — using Stripe's canned test methods (`pm_card_visa`) and
+tiny test-currency amounts, never real card data — and creates then removes throwaway test
+objects (customer, setup/payment intents, refund) as it exercises the full stored-customer
+and payment-method lifecycle. Nothing is written to the repo and no key is committed.
+
 ## Requirements
 
 PHP `^8.4`; Laravel `^12 || ^13`; `stripe/stripe-php` `^20.3`; `cboxdk/laravel-billing`.
