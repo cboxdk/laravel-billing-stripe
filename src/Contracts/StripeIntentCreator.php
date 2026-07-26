@@ -25,11 +25,19 @@ use Cbox\Billing\Stripe\Exceptions\StripeChargeFailed;
 interface StripeIntentCreator
 {
     /**
+     * Create and CONFIRM an off-session charge against a vaulted instrument.
+     *
+     * `$customerRef` (`cus_…`) and `$paymentMethodRef` (`pm_…`) are required: an intent
+     * created without them comes back `requires_payment_method`, which the status mapper reads
+     * as "needs action" rather than "failed" — so a renewal collects nothing and dunning never
+     * opens. `off_session` + `confirm` are what make Stripe pull the instrument immediately and
+     * what let it claim the PSD2 merchant-initiated-transaction exemption.
+     *
      * @return array{id: string, status: string}
      *
      * @throws StripeChargeFailed
      */
-    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey): array;
+    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey, string $customerRef, string $paymentMethodRef): array;
 
     /**
      * Refund `$amountMinor` against the original payment intent (`pi_…`), scoped by the

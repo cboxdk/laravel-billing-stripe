@@ -36,6 +36,12 @@ class FakeStripeIntentCreator implements StripeIntentCreator
     /** @var list<?string> the payment-method ids the gateway passed on intent creation, in order */
     public array $intentPaymentMethodIds = [];
 
+    /** @var list<string> the gateway customer refs the gateway asked to charge off-session, in order */
+    public array $chargedCustomers = [];
+
+    /** @var list<string> the vaulted instrument refs the gateway asked to charge off-session, in order */
+    public array $chargedPaymentMethods = [];
+
     /** @var array<string, list<array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}>> */
     private array $methods = [];
 
@@ -57,9 +63,15 @@ class FakeStripeIntentCreator implements StripeIntentCreator
         private string $intentStatus = 'succeeded',
     ) {}
 
-    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey): array
+    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey, string $customerRef, string $paymentMethodRef): array
     {
         $this->idempotencyKeys[] = $idempotencyKey;
+
+        // Record what the charge was actually pointed at, so a test can assert the vaulted
+        // instrument reached the gateway. A fake that accepts anything and reports success is
+        // how "renewals collect nothing" stayed green in CI.
+        $this->chargedCustomers[] = $customerRef;
+        $this->chargedPaymentMethods[] = $paymentMethodRef;
 
         if ($this->fail) {
             throw new StripeChargeFailed('card_declined');

@@ -13,9 +13,14 @@ use Cbox\Billing\Payment\ValueObjects\SetupIntentRequest;
 use Cbox\Billing\Stripe\StripePaymentGateway;
 use Cbox\Billing\Stripe\Testing\FakeStripeIntentCreator;
 
+/**
+ * An OFF-SESSION renewal intent: it names the gateway customer and the vaulted instrument,
+ * which is what a charge with nobody at the keyboard actually needs. An intent without them
+ * cannot be collected — see the refusal test at the bottom of this file.
+ */
 function paymentIntent(): PaymentIntent
 {
-    return new PaymentIntent('pi_1', Money::ofMinor(12500, 'EUR'), 'DK-000001');
+    return new PaymentIntent('pi_1', Money::ofMinor(12500, 'EUR'), 'DK-000001', 'cus_live', 'pm_live');
 }
 
 function refundIntent(): RefundIntent
@@ -217,4 +222,30 @@ it('attaches a payment method, lists it, and makes it the default', function () 
 
     expect($byId['pm_a']->isDefault)->toBeFalse()
         ->and($byId['pm_b']->isDefault)->toBeTrue();
+});
+
+it('charges the vaulted instrument the intent names', function () {
+    $creator = new FakeStripeIntentCreator('succeeded', 'pi_live');
+
+    gateway($creator)->charge(paymentIntent());
+
+    // The point of the contract: the customer and the saved method must reach the SDK seam.
+    // Creating an intent without them returns `requires_payment_method`, which maps to "needs
+    // action" rather than "failed" — so a renewal collected nothing and dunning never opened.
+    expect($creator->chargedCustomers)->toBe(['cus_live'])
+        ->and($creator->chargedPaymentMethods)->toBe(['pm_live']);
+});
+
+it('fails an off-session charge that has no vaulted instrument instead of reporting needs-action', function () {
+    $creator = new FakeStripeIntentCreator('succeeded', 'pi_live');
+
+    $result = gateway($creator)->charge(
+        new PaymentIntent('pi_2', Money::ofMinor(12500, 'EUR'), 'DK-000002'),
+    );
+
+    // Failing is the RECOVERABLE outcome — it opens dunning, which asks the customer for a
+    // card. Silently returning a non-failure leaves the subscription serving for free.
+    expect($result->status)->toBe(PaymentStatus::Failed)
+        ->and($result->failureReason)->toContain('saved payment method')
+        ->and($creator->chargedCustomers)->toBe([]);
 });
