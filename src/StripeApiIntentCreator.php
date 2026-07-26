@@ -19,13 +19,23 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
 {
     public function __construct(private StripeClient $client) {}
 
-    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey): array
+    public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey, string $customerRef, string $paymentMethodRef): array
     {
         try {
             $intent = $this->client->paymentIntents->create([
                 'amount' => $amountMinor,
                 'currency' => strtolower($currency),
                 'metadata' => ['reference' => $reference],
+                // The four parameters that make this an actual off-session collection rather
+                // than an intent nobody ever confirms. `customer` + `payment_method` name the
+                // vaulted instrument; `off_session` tells Stripe the cardholder is absent (and
+                // is what supports claiming the PSD2 MIT exemption); `confirm` charges now
+                // instead of parking the intent in `requires_payment_method`, which the mapper
+                // would read as "needs action" and which therefore never opens dunning.
+                'customer' => $customerRef,
+                'payment_method' => $paymentMethodRef,
+                'off_session' => true,
+                'confirm' => true,
             ], ['idempotency_key' => $idempotencyKey]);
         } catch (Throwable $e) {
             throw new StripeChargeFailed($e->getMessage(), previous: $e);

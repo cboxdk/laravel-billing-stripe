@@ -48,12 +48,25 @@ readonly class StripePaymentGateway implements PaymentGateway
 
     public function charge(PaymentIntent $intent): PaymentResult
     {
+        // Refuse rather than attempt a charge that cannot succeed. Without a vaulted
+        // instrument Stripe returns `requires_payment_method`, which maps to "needs action" —
+        // so the renewal would report a non-failure, dunning would never open, and the
+        // subscription would keep serving while collecting nothing. A FAILED result is the
+        // recoverable outcome: it opens dunning, which asks the customer for a card.
+        if (! $intent->isOffSession()) {
+            return PaymentResult::failed(
+                'No saved payment method for this account: an off-session charge needs both a gateway customer and a vaulted payment method. Ask the customer to add a card in the billing portal.',
+            );
+        }
+
         try {
             $result = $this->creator->create(
                 $intent->amount->minor(),
                 $intent->amount->currency(),
                 $intent->reference,
                 $this->idempotencyKey($intent),
+                (string) $intent->customerRef,
+                (string) $intent->paymentMethodRef,
             );
         } catch (StripeChargeFailed $e) {
             return PaymentResult::failed($e->getMessage());
