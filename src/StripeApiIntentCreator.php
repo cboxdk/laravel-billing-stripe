@@ -22,8 +22,14 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
     public function create(int $amountMinor, string $currency, string $reference, string $idempotencyKey, string $customerRef, string $paymentMethodRef): array
     {
         try {
+            // Stripe confirms only the types an intent allows, and leaves a bank debit out unless the
+            // intent names it, so a saved mandate was refused before it was ever pulled. The intent
+            // allows exactly the saved method's own type.
+            $type = StripePaymentMethodMapper::type($this->client->paymentMethods->retrieve($paymentMethodRef)->toArray());
+
             $intent = $this->client->paymentIntents->create([
                 'amount' => $amountMinor,
+                'payment_method_types' => [$type !== '' ? $type : 'card'],
                 'currency' => strtolower($currency),
                 'metadata' => ['reference' => $reference],
                 // The four parameters that make this an actual off-session collection rather
@@ -112,7 +118,8 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
     {
         try {
             $customer = $this->client->customers->retrieve($account);
-            $methods = $this->client->paymentMethods->all(['customer' => $account, 'type' => 'card']);
+            // Every type, not cards only: a bank debit mandate is a saved method a renewal charges.
+            $methods = $this->client->paymentMethods->all(['customer' => $account, 'limit' => 100]);
         } catch (Throwable $e) {
             throw new StripeChargeFailed($e->getMessage(), previous: $e);
         }
@@ -125,8 +132,13 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
 
         foreach ($methods->data as $method) {
             $data = $method->toArray();
+
+            if (! StripePaymentMethodMapper::supports($data)) {
+                continue;
+            }
+
             $id = self::str($data, 'id');
-            $mapped[] = self::mapMethod($data, $id !== '' && $id === $defaultId);
+            $mapped[] = StripePaymentMethodMapper::map($data, $id !== '' && $id === $defaultId);
         }
 
         return $mapped;
@@ -141,7 +153,7 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
         }
 
         // Attaching does not change the account default; a fresh attach is not yet default.
-        return self::mapMethod($method->toArray(), false);
+        return StripePaymentMethodMapper::map($method->toArray(), false);
     }
 
     public function setDefaultMethod(string $account, string $paymentMethodId): void
@@ -208,39 +220,10 @@ readonly class StripeApiIntentCreator implements StripeIntentCreator
     }
 
     /**
-     * Normalise a Stripe PaymentMethod's array form onto the seam's display shape,
-     * reading only the non-sensitive card fields (brand/last4/expiry) — never the PAN.
-     *
-     * @param  array<array-key, mixed>  $data
-     * @return array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}
-     */
-    private static function mapMethod(array $data, bool $isDefault): array
-    {
-        $card = isset($data['card']) && is_array($data['card']) ? $data['card'] : [];
-
-        return [
-            'id' => self::str($data, 'id'),
-            'brand' => self::str($card, 'brand'),
-            'last4' => self::str($card, 'last4'),
-            'expMonth' => self::intOrNull($card, 'exp_month'),
-            'expYear' => self::intOrNull($card, 'exp_year'),
-            'isDefault' => $isDefault,
-        ];
-    }
-
-    /**
      * @param  array<array-key, mixed>  $data
      */
     private static function str(array $data, string $key): string
     {
         return isset($data[$key]) && is_string($data[$key]) ? $data[$key] : '';
-    }
-
-    /**
-     * @param  array<array-key, mixed>  $data
-     */
-    private static function intOrNull(array $data, string $key): ?int
-    {
-        return isset($data[$key]) && is_int($data[$key]) ? $data[$key] : null;
     }
 }

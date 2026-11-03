@@ -134,14 +134,12 @@ it('runs the full stored-customer/method lifecycle against Stripe test mode', fu
         // Tidy up the un-confirmed on-session intent so nothing is left half-open.
         $client->paymentIntents->cancel(paymentIntentIdFromSecret($intent->clientSecret));
 
-        // 5. charge() → the real create() SDK path returns a live pi_… without throwing. A bare
-        //    intent (no confirmation) is not settled; it maps to RequiresAction. Then cancel it.
+        // 5. charge() with no vaulted instrument is not off-session: since v0.5.0 the gateway
+        //    refuses it as FAILED (which opens dunning) and never creates an intent at Stripe.
         $charge = $gateway->charge(new PaymentIntent('pi-charge', Money::ofMinor(50, 'EUR'), 'IT-CHG-'.$account));
 
-        expect($charge->status)->toBe(PaymentStatus::RequiresAction)
-            ->and($charge->gatewayReference)->toStartWith('pi_');
-
-        $client->paymentIntents->cancel($charge->gatewayReference);
+        expect($charge->status)->toBe(PaymentStatus::Failed)
+            ->and($charge->gatewayReference)->toBeNull();
 
         // 6. refund() round-trip: confirm a tiny charge on the saved method (test card settles
         //    immediately), then refund it THROUGH the gateway — exercising the real refund() SDK
@@ -182,3 +180,56 @@ it('runs the full stored-customer/method lifecycle against Stripe test mode', fu
         $client->customers->delete($customer);
     }
 });
+
+it('lists a saved bank debit and charges it off-session, where it waits in processing', function (string $type, string $currency, array $details, string $last4) {
+    $client = new StripeClient(liveStripeSecret());
+    $gateway = liveGateway($client);
+    $account = 'IT-'.bin2hex(random_bytes(6));
+    $customer = $gateway->createCustomer($account, 'ada@example.test', 'Ada Lovelace');
+
+    try {
+        // Saved the way a customer saves one in the element: a confirmed off-session SetupIntent
+        // with the mandate the customer accepted. ACH is verified with Stripe's test microdeposits.
+        $setup = $client->setupIntents->create([
+            'customer' => $customer,
+            'payment_method_types' => [$type],
+            'usage' => 'off_session',
+            'confirm' => true,
+            'payment_method_data' => ['type' => $type, $type => $details, 'billing_details' => [
+                'name' => 'Ada Lovelace', 'email' => 'ada@example.test',
+                'address' => ['line1' => '1 Main St', 'city' => 'Austin', 'state' => 'TX', 'postal_code' => '78701', 'country' => 'US'],
+            ]],
+            'payment_method_options' => $type === 'us_bank_account' ? ['us_bank_account' => ['verification_method' => 'microdeposits']] : [],
+            'mandate_data' => ['customer_acceptance' => ['type' => 'online', 'online' => ['ip_address' => '127.0.0.1', 'user_agent' => 'integration']]],
+        ]);
+
+        if ($type === 'us_bank_account') {
+            $setup = $client->setupIntents->verifyMicrodeposits((string) $setup->id, ['amounts' => [32, 45]]);
+        }
+
+        expect((string) $setup->status)->toBe('succeeded');
+
+        $method = (string) $setup->payment_method;
+        $gateway->setDefaultPaymentMethod($customer, $method);
+        $methods = $gateway->paymentMethods($customer);
+
+        expect($methods)->toHaveCount(1)
+            ->and($methods[0]->id)->toBe($method)
+            ->and($methods[0]->brand)->toBe($type)
+            ->and($methods[0]->last4)->toBe($last4)
+            ->and($methods[0]->expMonth)->toBeNull()
+            ->and($methods[0]->isDefault)->toBeTrue();
+
+        // The intent allows the method's own type, so Stripe pulls the mandate. A debit clears
+        // over days: it waits in processing.
+        $charge = $gateway->charge(new PaymentIntent('it-'.$type, Money::ofMinor(100, $currency), 'IT-DD-'.$account, $customer, $method));
+
+        expect($charge->status)->toBe(PaymentStatus::Pending)
+            ->and($charge->gatewayReference)->toStartWith('pi_');
+    } finally {
+        $client->customers->delete($customer);
+    }
+})->with([
+    'SEPA Direct Debit' => ['sepa_debit', 'EUR', ['iban' => 'AT611904300234573201'], '3201'],
+    'ACH Direct Debit' => ['us_bank_account', 'USD', ['routing_number' => '110000000', 'account_number' => '000123456789', 'account_holder_type' => 'individual'], '6789'],
+]);
