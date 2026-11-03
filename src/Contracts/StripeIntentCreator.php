@@ -74,7 +74,7 @@ interface StripeIntentCreator
     public function createSetup(string $account, string $idempotencyKey): array;
 
     /**
-     * The card payment methods saved for `$account`, with the account's default (the
+     * The payment methods saved for `$account` that an off-session charge can pull (cards and SEPA, ACH and Bacs debits), with the account's default (the
      * customer's `invoice_settings.default_payment_method`) flagged.
      *
      * @return list<array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}>

@@ -38,6 +38,14 @@ to the Stripe gateway. Without one, billing keeps its default (manual) gateway.
   key so a crash-and-retry never double-charges. Set `STRIPE_WEBHOOK_SECRET` to enable
   it. See [docs/core-concepts/webhooks.md](docs/core-concepts/webhooks.md).
 
+- **Cards and bank debits.** `paymentMethods()` lists the saved cards and the saved
+  SEPA Direct Debit, ACH (`us_bank_account`) and Bacs Direct Debit mandates. A card's
+  `brand` is its network (`visa`); a bank debit's `brand` is its Stripe type
+  (`sepa_debit`, `us_bank_account`, `bacs_debit`), its `last4` is the account's and it
+  has no expiry. An off-session charge allows exactly the saved method's own type, so
+  Stripe pulls a mandate as it pulls a card. A debit settles over days: the charge
+  comes back `pending` and the webhook settles or fails it.
+
 > The SDK wrapper implements Stripe's documented API shape — verify against the live
 > Stripe API (and provision real keys) before relying on it in production.
 
