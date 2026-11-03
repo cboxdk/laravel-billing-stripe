@@ -9,6 +9,7 @@ use Cbox\Billing\Payment\Contracts\ProcessedEventStore;
 use Cbox\Billing\Payment\Contracts\SettledPaymentStore;
 use Cbox\Billing\Payment\Contracts\WebhookIngest;
 use Cbox\Billing\Payment\Contracts\WebhookVerifier;
+use Cbox\Billing\Stripe\Contracts\StripeDisputes;
 use Cbox\Billing\Stripe\Contracts\StripeIntentCreator;
 use Cbox\Billing\Stripe\Database\DatabaseProcessedEventStore;
 use Cbox\Billing\Stripe\Database\DatabaseSettledPaymentStore;
@@ -67,6 +68,7 @@ class StripeServiceProvider extends ServiceProvider
         $publishableKey = is_string($publishable) ? $publishable : '';
 
         $this->app->singleton(StripeIntentCreator::class, static fn (): StripeApiIntentCreator => new StripeApiIntentCreator(new StripeClient($secret)));
+        $this->app->singleton(StripeDisputes::class, static fn (): StripeApiDisputes => new StripeApiDisputes(new StripeClient($secret)));
 
         $this->app->singleton(PaymentGateway::class, static fn (Application $app): StripePaymentGateway => new StripePaymentGateway(
             $app->make(StripeIntentCreator::class),

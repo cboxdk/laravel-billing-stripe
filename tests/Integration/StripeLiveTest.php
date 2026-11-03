@@ -10,6 +10,7 @@ use Cbox\Billing\Payment\ValueObjects\PaymentIntentRequest;
 use Cbox\Billing\Payment\ValueObjects\RefundIntent;
 use Cbox\Billing\Payment\ValueObjects\SetupIntentRequest;
 use Cbox\Billing\Payment\Webhook\Storage\InMemorySettledPaymentStore;
+use Cbox\Billing\Stripe\StripeApiDisputes;
 use Cbox\Billing\Stripe\StripeApiIntentCreator;
 use Cbox\Billing\Stripe\StripePaymentGateway;
 use Cbox\Billing\Stripe\Testing\FakeStripeIntentCreator;
@@ -233,3 +234,56 @@ it('lists a saved bank debit and charges it off-session, where it waits in proce
     'SEPA Direct Debit' => ['sepa_debit', 'EUR', ['iban' => 'AT611904300234573201'], '3201'],
     'ACH Direct Debit' => ['us_bank_account', 'USD', ['routing_number' => '110000000', 'account_number' => '000123456789', 'account_holder_type' => 'individual'], '6789'],
 ]);
+
+it('reads a real dispute, uploads a file and submits evidence that Stripe accepts', function () {
+    $client = new StripeClient(liveStripeSecret());
+    $disputes = new StripeApiDisputes($client);
+    $customer = $client->customers->create(['metadata' => ['account' => 'IT-dispute-'.bin2hex(random_bytes(4))]])->id;
+
+    try {
+        // Stripe's test card that is always disputed once it is charged.
+        $intent = $client->paymentIntents->create([
+            'amount' => 1500,
+            'currency' => 'dkk',
+            'customer' => $customer,
+            'payment_method' => 'pm_card_createDispute',
+            'payment_method_types' => ['card'],
+            'confirm' => true,
+        ]);
+
+        $disputeId = '';
+        $deadline = time() + 60;
+
+        while ($disputeId === '' && time() < $deadline) {
+            $found = $client->disputes->all(['payment_intent' => $intent->id, 'limit' => 1])->data;
+            $disputeId = isset($found[0]) ? (string) $found[0]->id : '';
+
+            if ($disputeId === '') {
+                sleep(2);
+            }
+        }
+
+        expect($disputeId)->toStartWith('du_');
+
+        $dispute = $disputes->retrieve($disputeId);
+        expect($dispute['status'])->toBe('needs_response')
+            ->and($dispute['paymentIntent'])->toBe($intent->id)
+            ->and($dispute['dueBy'])->toBeInt();
+
+        // A one-pixel PNG: Stripe checks the file type, not what the picture shows.
+        $file = $disputes->uploadEvidenceFile('receipt.png', (string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', true));
+        expect($file)->toStartWith('file_');
+
+        $submitted = $disputes->submitEvidence($disputeId, [
+            'receipt' => $file,
+            'customer_name' => 'Integration Test',
+            'uncategorized_text' => 'Evidence sent by the adapter integration suite.',
+        ]);
+
+        expect($submitted['status'])->toBe('under_review')
+            ->and($submitted['submissionCount'])->toBe(1)
+            ->and($submitted['hasEvidence'])->toBeTrue();
+    } finally {
+        $client->customers->delete($customer);
+    }
+});

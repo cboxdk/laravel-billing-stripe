@@ -10,3 +10,5 @@ description: The SDK seam and how Stripe statuses map to a payment result.
   the Stripe SDK and maps its statuses.
 - [Idempotent webhooks](webhooks.md) — how replayed and retried webhooks are
   verified once and applied once.
+- [Dispute evidence](disputes.md) — reading a dispute and sending evidence before the
+  deadline.
